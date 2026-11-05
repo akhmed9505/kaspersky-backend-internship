@@ -1,0 +1,8 @@
+# Paths are relative to the project root; use make generate.
+package: generated
+generate:
+  models: true
+  std-http-server: true
+# Keep empty: v2.8.1 gives a nonempty config output precedence over CLI -o.
+# The Makefile passes -o for both generation and comparison.
+output: ""

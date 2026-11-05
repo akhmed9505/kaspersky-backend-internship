@@ -1,0 +1,515 @@
+openapi: 3.0.0
+info:
+  title: Information Exchange Service
+  description: 'API для обмена информацией об угрозах. MD5 после проверки нормализуется в lowercase; уникальность
+    не зависит от регистра.
+
+    Все операции требуют X-API-Key и HTTPS. Строки должны содержать корректный Unicode без U+0000.
+
+    JSON: ровно один объект, точный регистр имён полей, без неизвестных полей, повторных ключей, null и trailing
+    data.
+
+    Приоритет проверок: общий rate limiter (429), API Key (401), limiter авторизованных запросов (429), маршрут/метод
+    (404/405), MD5 в URL (400), Content-Type (415), размер тела (413), JSON и значения (400), хранилище (404/409/500).
+
+    Для POST/PUT допустим application/json, включая charset=utf-8; тело не более 65536 байт. Размер проверяется
+    до JSON-разбора. GET не требует Content-Type.
+
+    Ошибки TLS и HTTP до middleware не обязаны возвращать ErrorResponse. Неизвестный маршрут возвращает 404; неподдерживаемый
+    метод известного маршрута — 405 с Allow. HEAD не входит в API.
+
+    Начальные лимиты: общий 100 запросов/с, burst 200; авторизованный 10 запросов/с, burst 20. Лимиты настраиваются
+    и действуют в пределах экземпляра.'
+  version: 1.0.0
+paths:
+  /info/{md5}:
+    get:
+      summary: Получить информацию об угрозе по MD5
+      description: Возвращает полную информацию об угрозе для указанного MD5-хеша.
+      operationId: getInfoByMd5
+      parameters:
+      - name: md5
+        in: path
+        required: true
+        description: MD5-хеш файла (32 символа, шестнадцатеричные цифры)
+        schema:
+          type: string
+          pattern: ^[a-fA-F0-9]{32}$
+          example: d41d8cd98f00b204e9800998ecf8427e
+      responses:
+        '200':
+          description: Успешный ответ с информацией об угрозе
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreatResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '404':
+          description: Угроза с указанным MD5 не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '400':
+          description: Некорректный формат MD5
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '500':
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '401':
+          description: Отсутствующий, неверный или неоднозначный API Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            WWW-Authenticate:
+              $ref: '#/components/headers/Authenticate'
+        '405':
+          description: Метод не поддерживается
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            Allow:
+              $ref: '#/components/headers/Allow'
+        '429':
+          description: Превышен лимит запросов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+    put:
+      summary: Обновить информацию об угрозе по MD5
+      description: 'Полная замена изменяемых данных существующей записи, без upsert. name обязателен. Пропуск description
+        сбрасывает в пустую строку, severity — unknown, file_type и first_seen_at очищает. MD5 только из URL и неизменяем.
+        created_at сохраняется, updated_at обновляется БД. Конкурентные PUT: последняя успешно выполненная запись
+        побеждает.'
+      operationId: updateThreat
+      parameters:
+      - name: md5
+        in: path
+        required: true
+        description: MD5-хеш обновляемой записи
+        schema:
+          type: string
+          pattern: ^[a-fA-F0-9]{32}$
+          example: d41d8cd98f00b204e9800998ecf8427e
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThreatUpdateRequest'
+      responses:
+        '200':
+          description: Информация успешно обновлена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreatResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '400':
+          description: Некорректные данные запроса или MD5
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '404':
+          description: Угроза с указанным MD5 не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '500':
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '401':
+          description: Отсутствующий, неверный или неоднозначный API Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            WWW-Authenticate:
+              $ref: '#/components/headers/Authenticate'
+        '405':
+          description: Метод не поддерживается
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            Allow:
+              $ref: '#/components/headers/Allow'
+        '429':
+          description: Превышен лимит запросов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+        '413':
+          description: Тело превышает 65536 байт
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '415':
+          description: Неподдерживаемый Content-Type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+  /info:
+    post:
+      summary: Создать новую запись об угрозе
+      description: Добавляет новую информацию об угрозе. MD5 должен быть уникальным.
+      operationId: createThreat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThreatCreateRequest'
+      responses:
+        '201':
+          description: Запись успешно создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreatResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '400':
+          description: Некорректные данные запроса (например, невалидный MD5)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '409':
+          description: Угроза с таким MD5 уже существует
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '500':
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '401':
+          description: Отсутствующий, неверный или неоднозначный API Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            WWW-Authenticate:
+              $ref: '#/components/headers/Authenticate'
+        '405':
+          description: Метод не поддерживается
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            Allow:
+              $ref: '#/components/headers/Allow'
+        '429':
+          description: Превышен лимит запросов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+        '413':
+          description: Тело превышает 65536 байт
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '415':
+          description: Неподдерживаемый Content-Type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+components:
+  schemas:
+    ThreatCreateRequest:
+      type: object
+      required:
+      - md5
+      - name
+      properties:
+        md5:
+          type: string
+          pattern: ^[a-fA-F0-9]{32}$
+          description: MD5-хеш файла (32 шестнадцатеричных символа); в ответе lowercase, пробелы не удаляются.
+          example: d41d8cd98f00b204e9800998ecf8427e
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Название угрозы; не только Unicode whitespace. Длина в Unicode-кодовых точках; пробелы не
+            обрезаются.
+          example: Trojan.Win32.Generic
+        description:
+          type: string
+          maxLength: 4096
+          default: ''
+          description: Описание; Unicode-кодовые точки, без скрытой нормализации.
+        severity:
+          type: string
+          enum:
+          - unknown
+          - low
+          - medium
+          - high
+          - critical
+          default: unknown
+        file_type:
+          type: string
+          minLength: 1
+          maxLength: 32
+          pattern: ^[a-z0-9][a-z0-9._+-]{0,31}$
+          description: Открытая метка формата, не MIME и не результат анализа. Пропуск означает неизвестное значение.
+          example: pe
+        first_seen_at:
+          type: string
+          format: date-time
+          description: 'Время обнаружения клиента: RFC3339 с timezone, год 1–9999. Будущее разрешено. UTC в ответе;
+            точность хранения — микросекунды. Пропуск означает неизвестное значение.'
+          example: '2026-01-01T12:00:00Z'
+      additionalProperties: false
+      description: 'Все null запрещены. Пропуски новых полей: description="", severity=unknown, file_type/first_seen_at
+        неизвестны. Системные timestamps передавать нельзя.'
+    ThreatUpdateRequest:
+      type: object
+      required:
+      - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Название угрозы; не только Unicode whitespace. Длина в Unicode-кодовых точках; пробелы не
+            обрезаются.
+          example: Trojan.Win32.Generic
+        description:
+          type: string
+          maxLength: 4096
+          default: ''
+          description: Описание; Unicode-кодовые точки, без скрытой нормализации.
+        severity:
+          type: string
+          enum:
+          - unknown
+          - low
+          - medium
+          - high
+          - critical
+          default: unknown
+        file_type:
+          type: string
+          minLength: 1
+          maxLength: 32
+          pattern: ^[a-z0-9][a-z0-9._+-]{0,31}$
+          description: Открытая метка формата, не MIME и не результат анализа. Пропуск означает неизвестное значение.
+          example: pe
+        first_seen_at:
+          type: string
+          format: date-time
+          description: 'Время обнаружения клиента: RFC3339 с timezone, год 1–9999. Будущее разрешено. UTC в ответе;
+            точность хранения — микросекунды. Пропуск означает неизвестное значение.'
+          example: '2026-01-01T12:00:00Z'
+      additionalProperties: false
+      description: 'Все null запрещены. Пропуски новых полей: description="", severity=unknown, file_type/first_seen_at
+        неизвестны. Системные timestamps передавать нельзя.'
+    ThreatResponse:
+      type: object
+      properties:
+        md5:
+          type: string
+          pattern: ^[a-fA-F0-9]{32}$
+          description: MD5-хеш файла (32 шестнадцатеричных символа); в ответе lowercase, пробелы не удаляются.
+          example: d41d8cd98f00b204e9800998ecf8427e
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Название угрозы; не только Unicode whitespace. Длина в Unicode-кодовых точках; пробелы не
+            обрезаются.
+          example: Trojan.Win32.Generic
+        description:
+          type: string
+          maxLength: 4096
+          default: ''
+          description: Описание; Unicode-кодовые точки, без скрытой нормализации.
+        severity:
+          type: string
+          enum:
+          - unknown
+          - low
+          - medium
+          - high
+          - critical
+          default: unknown
+        file_type:
+          type: string
+          minLength: 1
+          maxLength: 32
+          pattern: ^[a-z0-9][a-z0-9._+-]{0,31}$
+          description: Открытая метка формата, не MIME и не результат анализа. Пропуск означает неизвестное значение.
+          example: pe
+        first_seen_at:
+          type: string
+          format: date-time
+          description: 'Время обнаружения клиента: RFC3339 с timezone, год 1–9999. Будущее разрешено. UTC в ответе;
+            точность хранения — микросекунды. Пропуск означает неизвестное значение.'
+          example: '2026-01-01T12:00:00Z'
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Задаётся PostgreSQL, UTC, микросекундная точность. При PUT сохраняется.
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Задаётся PostgreSQL, UTC, микросекундная точность. Обновляется каждым успешным PUT; не является
+            уникальной или монотонной версией.
+      required:
+      - md5
+      - name
+      - description
+      - severity
+      - created_at
+      - updated_at
+      description: Неизвестные file_type и first_seen_at отсутствуют; null не возвращается. При создании created_at
+        = updated_at.
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Человекочитаемое описание ошибки
+          example: Threat not found
+        details:
+          type: string
+          description: Дополнительная информация
+          example: No threat with MD5 d41d8cd98f00b204e9800998ecf8427e found
+      required:
+      - message
+      description: Безопасное сообщение и необязательные строковые details; без SQL, секретов и stack trace.
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: 'Один сервисный ключ с едиными правами. Отсутствующий, неверный или многократно переданный ключ:
+        401.'
+  headers:
+    RequestID:
+      description: Идентификатор, сгенерированный сервером.
+      schema:
+        type: string
+    RetryAfter:
+      description: Положительное число секунд до повторной попытки.
+      schema:
+        type: integer
+        minimum: 1
+    Allow:
+      description: Допустимые методы известного маршрута.
+      schema:
+        type: string
+    Authenticate:
+      description: Схема API Key.
+      schema:
+        type: string
+      example: ApiKey realm="information-exchange"
+servers:
+- url: https://localhost:8443
+security:
+- ApiKeyAuth: []

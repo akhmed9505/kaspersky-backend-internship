@@ -1,0 +1,140 @@
+name: kaspersky-information-exchange
+
+services:
+  db:
+    image: postgres:17.11-bookworm
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      DB_USER: ${DB_USER:-kaspersky}
+      DB_NAME: ${DB_NAME:-kaspersky}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/10-app-user.sh:ro
+    healthcheck:
+      # TCP is available only after the entrypoint finishes initializing roles/databases.
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks: [application]
+
+  migrate:
+    image: migrate/migrate:v4.18.3
+    user: "65532:65532"
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        export PGHOST="$$DB_HOST" PGPORT="$$DB_PORT" PGUSER="$$DB_USER" PGDATABASE="$$DB_NAME" PGSSLMODE="$$DB_SSLMODE"
+        exec /migrate -path=/migrations -database "postgres://$${DB_USER}@$${DB_HOST}:$${DB_PORT}/$${DB_NAME}?sslmode=disable" up
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER:-kaspersky}
+      DB_NAME: ${DB_NAME:-kaspersky}
+      DB_SSLMODE: disable
+      PGPASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks: [application]
+
+  app:
+    build:
+      context: .
+      target: runtime
+    environment:
+      # Container endpoints are deliberately fixed; host DB settings cannot redirect this app.
+      HTTPS_ADDR: :8443
+      TLS_CERT_FILE: /run/secrets/tls_certificate
+      TLS_KEY_FILE: /run/secrets/tls_private_key
+      API_KEY: ${API_KEY:?Set API_KEY in .env}
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER:-kaspersky}
+      DB_NAME: ${DB_NAME:-kaspersky}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      DB_SSLMODE: disable
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-10}
+      DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-5s}
+      HTTP_READ_HEADER_TIMEOUT: ${HTTP_READ_HEADER_TIMEOUT:-5s}
+      HTTP_READ_TIMEOUT: ${HTTP_READ_TIMEOUT:-10s}
+      HTTP_WRITE_TIMEOUT: ${HTTP_WRITE_TIMEOUT:-10s}
+      HTTP_IDLE_TIMEOUT: ${HTTP_IDLE_TIMEOUT:-60s}
+      REQUEST_TIMEOUT: ${REQUEST_TIMEOUT:-5s}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-10s}
+      HTTP_MAX_HEADER_BYTES: ${HTTP_MAX_HEADER_BYTES:-16384}
+      GLOBAL_RPS: ${GLOBAL_RPS:-100}
+      GLOBAL_BURST: ${GLOBAL_BURST:-200}
+      AUTHORIZED_RPS: ${AUTHORIZED_RPS:-10}
+      AUTHORIZED_BURST: ${AUTHORIZED_BURST:-20}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    secrets: [tls_certificate, tls_private_key]
+    ports:
+      - "127.0.0.1:8443:8443"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 20s
+    networks: [application]
+
+  test-db:
+    image: postgres:17.11-bookworm
+    profiles: [integration]
+    environment:
+      POSTGRES_USER: test_admin
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    networks: [testing]
+
+  integration-tests:
+    profiles: [integration]
+    build:
+      context: .
+      target: test
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        export TEST_POSTGRES_ADMIN_DSN="postgres://test_admin@test-db:5432/postgres?sslmode=disable"
+        go test ./...
+        go vet ./...
+        go test -tags=integration -count=1 -timeout=2m ./tests/integration
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    depends_on:
+      test-db:
+        condition: service_healthy
+    networks: [testing]
+
+volumes:
+  postgres_data:
+
+networks:
+  application:
+  testing:
+    internal: true
+
+secrets:
+  tls_certificate:
+    file: ${TLS_CERT_FILE:-${HOME}/.local/share/kaspersky-backend-internship/server.crt}
+  tls_private_key:
+    file: ${TLS_KEY_FILE:-${HOME}/.local/share/kaspersky-backend-internship/server.key}
